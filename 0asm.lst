@@ -1,0 +1,810 @@
+     1                                  ;;; # 0asm
+     2                                  ;;;
+     3                                  ;;; 0asm is a 16-bit x86 assembler written in 16-bit x86 assembly which fits
+     4                                  ;;; in under 512 bytes of x86 machine code! It runs on
+     5                                  ;;; [bootOS](https://github.com/nanochess/bootOS/). 
+     6                                  ;;;
+     7                                  ;;; ## Assembling
+     8                                  ;;;
+     9                                  ;;; You can assemble and run 0asm using nasm and QEMU (respectively):
+    10                                  ;;;
+    11                                  ;;;     make run
+    12                                  ;;;
+    13                                  ;;; This also copies the input file `test.asm` into the disk under `H`. One
+    14                                  ;;; can then run the assembler in bootOS:
+    15                                  ;;;
+    16                                  ;;;     $0asm
+    17                                  ;;;
+    18                                  ;;; and then run the output program under `P`:
+    19                                  ;;;
+    20                                  ;;;     $P
+    21                                  ;;;     Hello, world! $
+    22                                  ;;;
+    23                                  ;;; Further examples are available under the `examples/` directory.
+    24                                  ;;;
+    25                                  ;;; ## Anticipated FAQ
+    26                                  ;;;
+    27                                  ;;; ### What does it support?
+    28                                  ;;;
+    29                                  ;;; 0asm supports several common instructions, labels (absolute and relative
+    30                                  ;;; relocations), and octal literals (but only octal literals). It also
+    31                                  ;;; supports all 16-bit x86 general purpose registers, but does not support
+    32                                  ;;; segment registers.
+    33                                  ;;; 
+    34                                  ;;; Many jump instructions are supported (call, jmp, jb, jnb, jz, jnz, jbe,
+    35                                  ;;; jnbe), along with several memory addressing instructions (stosb, stosw,
+    36                                  ;;; lodsb, lodsw, cbw), several stack instructions (push, pop, ret), a
+    37                                  ;;; few fundamental arithmetic instructions in both register/register and
+    38                                  ;;; register/immediate form (add, and, xor, cmp, mov), and some special
+    39                                  ;;; instructions (int, the pseudo-instruction db).
+    40                                  ;;;
+    41                                  ;;; Errors are not really handled, but the assembler does usually exit cleanly
+    42                                  ;;; instead of producing garbage.
+    43                                  ;;;
+    44                                  ;;; ### How does it work?
+    45                                  ;;;
+    46                                  ;;; 0asm is a simple 2-pass assembler. The first pass collects labels into a
+    47                                  ;;; "symbol table", and the addresses of instructions which need to be fixed
+    48                                  ;;; into a "fixup table". The first pass also outputs the machine code for
+    49                                  ;;; instructions which do not require any relocation.
+    50                                  ;;;
+    51                                  ;;; ### Is it self-hosting?
+    52                                  ;;;
+    53                                  ;;; Unfortunately not yet, for several reasons.
+    54                                  ;;;
+    55                                  ;;; 1. The underlying bootOS only supports 512 byte files.
+    56                                  ;;; 2. The instruction encoding produced is not optimal, so it will not fit
+    57                                  ;;; in 512 bytes once assembled.
+    58                                  ;;; 3. Shift instructions are not yet supported.
+    59                                  ;;;
+    60                                  ;;; These problems are not insurmountable, although it seems difficult.
+    61                                  ;;; We could easily move the goalpost by typing the entire program using db,
+    62                                  ;;; but of course that would be no fun.
+    63                                  ;;;
+    64                                  ;;; ## Development
+    65                                  ;;;
+    66                                  ;;; The code is decently commented. Many of the files in this repo are
+    67                                  ;;; generated from `0asm.asm`, including the README. You can also debug by
+    68                                  ;;; running `make debug` (to start QEMU in one pane) and `make gdbdebug`
+    69                                  ;;; (to start GDB along with some helpful default scripts).
+    70                                  ;;;
+    71                                  ;;; ## License
+    72                                  ;;;
+    73                                  ;;; Copyright (c) 2019 Keyhan Vakil
+    74                                  ;;; 
+    75                                  ;;; This program is free software: you can redistribute it and/or modify
+    76                                  ;;; it under the terms of the GNU General Public License as published by
+    77                                  ;;; the Free Software Foundation, either version 3 of the License, or
+    78                                  ;;; (at your option) any later version.
+    79                                  ;;;
+    80                                  ;;; This program is distributed in the hope that it will be useful,
+    81                                  ;;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+    82                                  ;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    83                                  ;;; GNU General Public License for more details.
+    84                                  ;;;
+    85                                  ;;; You should have received a copy of the GNU General Public License
+    86                                  ;;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    87                                  
+    88                                  ;; Vocabulary
+    89                                  
+    90                                  ;; hash: a formula which maps identifiers to a 16-bit value (for shorter, but
+    91                                  ;; lossy, string comparisons). See the hash procedure for its computation.
+    92                                  
+    93                                  ;; table: an associative array of (key, value) pairs. Keys are typically
+    94                                  ;; outputs of the hash function, while values are any 16-bit values.
+    95                                  
+    96                                  ;; clobbered: indicates that a register is changed by a procedure in some
+    97                                  ;; unspecified fashion.
+    98                                  
+    99                                  ;; consumed: as we read characters from our input buffer, we "consume"
+   100                                  ;; them. We generally keep the invariant that al is the next character in
+   101                                  ;; the buffer, and si points to the rest of the buffer. Note that consuming
+   102                                  ;; is different than clobbering, as consuming means that we maintain this
+   103                                  ;; invariant!
+   104                                  
+   105                                  ;; ";!": this comment symbol indicates that some code or functionality is
+   106                                  ;; easily added, but was removed so that the program fits in 512 bytes.
+   107                                  
+   108                                  bits 16
+   109                                  fixup_table:    equ 0o40000
+   110                                  symbol_table:   equ 0o50000
+   111                                  register_table: equ 0o60000
+   112                                  input_start:    equ 0o65400
+   113                                  output_start:   equ 0o66400
+   114                                  int_exit:       equ 0o40
+   115                                  int_read_file:  equ 0o43
+   116                                  int_save_file:  equ 0o44
+   117                                  
+   118                                  global _start
+   119                                  _start:
+   120                                  
+   121                                  ;; Zero out fixup, symbol table, and the stack. Many of the functions below
+   122                                  ;; (like lookup and add_table) assume that tables are zero-terminated, and
+   123                                  ;; this initialization ensures that this is the case.
+   124                                  initialize_tables:
+   125                                      ; This zeros out 0x4000 to 0x6f00.
+   126                                      ; 0x4000 is the address of the fixup table.
+   127                                      ; 0x5000 is the address of the symbol table.
+   128                                      ; 0x6f00 is the start of the stack.
+   129 00000000 BF0040                      mov di,fixup_table
+   130                                      ; We set only ch here, which saves us a byte. This means that the lower
+   131                                      ; cl might be garbage, but this is OK -- the maximum value is 0x2fff,
+   132                                      ; which would have us write up to 0x7000, right below bootOS. The minimum
+   133                                      ; value is 0x2f00, which still zeros out everything we need.
+   134                                      ;
+   135                                      ; In any case, error-checking is definitely not the priority of this
+   136                                      ; assembler...
+   137 00000003 B52F                        mov ch,0o57
+   138 00000005 B000                        mov al,0o0
+   139 00000007 F3AA                        rep stosb
+   140                                  
+   141                                  ;; Unlike other tables, the register table is generated at runtime, since the
+   142                                  ;; lookup values are sequential, we can save bytes by only storing the keys.
+   143                                  initialize_register_table:
+   144                                      ; It's shorter to do this manually than to use add_table.
+   145 00000009 BE[DD01]                    mov si,partial_register_table
+   146 0000000C BF0060                      mov di,register_table
+   147                                      ; cx is zero from the rep stosb in initialize_tables.
+   148                                  .initialize_register_table_loop:
+   149 0000000F AD                          lodsw
+   150 00000010 21C0                        and ax,ax
+   151 00000012 AB                          stosw
+   152                                      ; Stop when we reach the end of the partial_register_table.
+   153 00000013 7406                        jz .initialize_register_table_end
+   154 00000015 89C8                        mov ax,cx
+   155 00000017 AB                          stosw
+   156 00000018 41                          inc cx
+   157 00000019 EBF4                        jmp .initialize_register_table_loop
+   158                                  .initialize_register_table_end:
+   159                                  
+   160                                  ;; Initialize si to point to the input buffer and di to point to the output
+   161                                  ;; buffer. Read in the input file into the input buffer.
+   162                                  init:
+   163                                      ; Start stack pointer right below input buffer. This leaves space for
+   164                                      ; 0x200 input bytes, which is the size of files in bootOS. The output
+   165                                      ; buffer will start at 0x6d00.
+   166 0000001B BC006B                      mov sp,input_start
+   167 0000001E 89E7                        mov di,sp
+   168                                      ; Read in the file "H".
+   169 00000020 BB[BF01]                    mov bx,infile
+   170 00000023 CD23                        int int_read_file
+   171 00000025 723C                        jc done_error
+   172                                      ; All registers except sp could be clobbered at this point.
+   173 00000027 89E6                        mov si,sp
+   174                                      ; Give space for 0x200 output bytes, until 0x6f00.
+   175 00000029 BF006D                      mov di,output_start
+   176                                  
+   177                                  ;; Keep reading instructions. This lets us use "ret" when we successfully
+   178                                  ;; parse an instruction, which ends up saving many bytes over
+   179                                  ;; "jmp read_instruction", because we need to jump back so often.
+   180                                  read_instruction_loop:
+   181 0000002C E80200                      call read_instruction
+   182 0000002F EBFB                        jmp read_instruction_loop
+   183                                  
+   184                                  ;; Read and assemble a single instruction.
+   185                                  read_instruction:
+   186 00000031 AC                          lodsb
+   187                                  
+   188                                  ;; This block will be executed when we are finished parsing the entire file.
+   189                                  done:
+   190                                      ; The input file is NUL terminated. If this is not a NUL, then we need to
+   191                                      ; keep parsing the file.
+   192 00000032 20C0                        and al,al
+   193 00000034 752F                        jne done_end
+   194                                  .fixup_labels:
+   195 00000036 BE0040                      mov si,fixup_table
+   196                                  .fixup_labels_loop:
+   197                                      ; Load key from fixup table.
+   198 00000039 AD                          lodsw
+   199 0000003A 21C0                        and ax,ax
+   200 0000003C 741D                        jz .fixup_labels_done
+   201                                      ; Lookup key in symbol table.
+   202 0000003E 89F5                        mov bp,si
+   203 00000040 BE0050                      mov si,symbol_table
+   204 00000043 89C1                        mov cx,ax
+   205 00000045 E8FF00                      call lookup
+   206                                      ; Error: could not find a label for this address we need to fix.
+   207 00000048 7319                        jnc done_error
+   208                                  
+   209                                      ; Currently there is a "fixup hint" (f) stored at the address of the
+   210                                      ; immediate we are fixing (i), and the label address is d. This code sets
+   211                                      ; *i = f + d - i. This allows us to support both relative and absolute
+   212                                      ; relocations, by choosing the fixup hint appropriately. (See jmp_and_call
+   213                                      ; as well as parse_2x.parse_2x_label for relative and absolute relocations
+   214                                      ; respectively.)
+   215                                  
+   216                                      ; Store the label address.
+   217 0000004A 50                          push ax
+   218                                      ; Get the location to fixup.
+   219 0000004B AD                          lodsw
+   220                                      ; Store the location of the next key in the fixup table.
+   221 0000004C 56                          push si
+   222                                      ; Get the fixup hint.
+   223 0000004D 89C7                        mov di,ax
+   224 0000004F 89FE                        mov si,di
+   225 00000051 AD                          lodsw
+   226                                      ; Convert to relative address.
+   227 00000052 29F8                        sub ax,di
+   228 00000054 5E                          pop si
+   229 00000055 59                          pop cx
+   230 00000056 01C8                        add ax,cx
+   231                                      ; Store fixed address to output.
+   232 00000058 AB                          stosw
+   233 00000059 EBDE                        jmp .fixup_labels_loop
+   234                                  .fixup_labels_done:
+   235                                      ; Original start of output buffer.
+   236 0000005B BF006D                      mov di,output_start
+   237                                      ; Output to the file "P".
+   238 0000005E BB[C301]                    mov bx,outfile
+   239 00000061 CD24                        int int_save_file
+   240                                  done_error:
+   241 00000063 CD20                        int int_exit
+   242                                  done_end:
+   243                                  
+   244                                      ; Skip space or space-ish character
+   245 00000065 3C20                        cmp al,' '
+   246 00000067 76C8                        jbe read_instruction
+   247                                  
+   248                                  ;; If we see a comment, read until a newline.
+   249                                  read_comment:
+   250 00000069 3C3B                        cmp al,';'
+   251 0000006B 7506                        jnz .read_comment_end
+   252                                  .read_comment_loop:
+   253 0000006D AC                          lodsb
+   254 0000006E 3C0A                        cmp al,`\n`
+   255 00000070 75FB                        jnz .read_comment_loop
+   256 00000072 C3                          ret
+   257                                  .read_comment_end:
+   258                                  
+   259 00000073 E8E000                      call hash
+   260                                  
+   261                                      ; At this point, al equals the first non-identifier character,
+   262                                      ; and si points to right after al.
+   263                                      ;
+   264                                      ; Some examples follow. The position of al is marked a, the position
+   265                                      ; of si is marked s. $ is used to indicate a newline.
+   266                                      ;
+   267                                      ;      mov ax,cx$
+   268                                      ;         as
+   269                                      ;
+   270                                      ;      hello:$
+   271                                      ;           as
+   272                                      ;
+   273                                      ;      ret$
+   274                                      ;         as
+   275                                  
+   276                                      ; Hashes are critical for the memory efficiency of 0asm. The computed hash
+   277                                      ; is used as an index in an associative array. The code in hash.c is
+   278                                      ; helpful for computing the hash of many instructions at once.
+   279                                  
+   280                                  ;; If the next character in the buffer is a colon, this adds the label to our
+   281                                  ;; symbol table.
+   282                                  add_to_label:
+   283 00000076 3C3A                        cmp al,':'
+   284 00000078 751A                        jne add_to_label_end
+   285                                  
+   286 0000007A B650                        mov dh,symbol_table >> 8
+   287                                      ; Inlining the tail call to add_table here saves us a two bytes of a jmp.
+   288                                  
+   289                                  ;; Add (cx, di) to the table at cx.
+   290                                  ;; Inputs:
+   291                                  ;;   cx is the key to write.
+   292                                  ;;   dx is the address of the table to write to. It MUST be 256 B aligned.
+   293                                  ;;   di is the value to write.
+   294                                  ;; Outputs:
+   295                                  ;;   ax is clobbered to the initial value of di.
+   296                                  add_table:
+   297                                      ; Save old values.
+   298 0000007C 56                          push si
+   299 0000007D 57                          push di
+   300 0000007E 30D2                        xor dl,dl
+   301                                      ; Set si equal to the start of the table.
+   302 00000080 89D6                        mov si,dx
+   303                                  .add_table_nonzero:
+   304                                      ; Find first zero value.
+   305 00000082 AD                          lodsw
+   306 00000083 21C0                        and ax,ax
+   307 00000085 75FB                        jnz .add_table_nonzero
+   308                                      ; Make di actually point to the zero value.
+   309 00000087 89F7                        mov di,si
+   310                                      ; Decrementing twice is shorter than subtracting 2.
+   311 00000089 4F                          dec di
+   312 0000008A 4F                          dec di
+   313                                      ; Store the key-value pair.
+   314 0000008B 89C8                        mov ax,cx
+   315 0000008D AB                          stosw
+   316                                      ; Pop old di into ax for stosw.
+   317 0000008E 58                          pop ax
+   318 0000008F AB                          stosw
+   319 00000090 89C7                        mov di,ax
+   320 00000092 5E                          pop si
+   321 00000093 C3                          ret
+   322                                  add_to_label_end:
+   323                                  
+   324                                      ; db
+   325                                  parse_db:
+   326                                      ; The immediate is the hash of the string "db".
+   327 00000094 81F9E18F                    cmp cx,0o107741
+   328 00000098 7409                        je store_odigit_byte
+   329                                  .parse_db_end:
+   330                                  
+   331                                      ; int
+   332                                  parse_int:
+   333 0000009A 81F9EC80                    cmp cx,0o100354
+   334 0000009E 750A                        jne parse_int_end
+   335 000000A0 B0CD                        mov al,0o315
+   336 000000A2 AA                          stosb
+   337                                  store_odigit_byte:
+   338 000000A3 E8C300                      call odigit
+   339 000000A6 7336                        jnc error
+   340 000000A8 AA                          stosb
+   341 000000A9 C3                          ret
+   342                                  parse_int_end:
+   343                                  
+   344                                      ; All calls to lookup expect a saved value of si in bp, which is restored
+   345                                      ; on success.
+   346 000000AA 89F5                        mov bp,si
+   347                                  
+   348                                  ;; Deals with jmp and call instructions, encoded as:
+   349                                  ;;    - opcode (1 or 2 bytes) - from the table.
+   350                                  ;;    - immediate (2 bytes) - needs to be relocated by linker.
+   351                                  jmp_and_call:
+   352 000000AC BE[8101]                    mov si,jmp_and_call_table
+   353 000000AF E89500                      call lookup
+   354 000000B2 7313                        jnc .jmp_and_call_end
+   355                                  .jmp_and_call_match:
+   356                                      ; Blindly store BOTH bytes into the buffer. (We'll fix this below.)
+   357 000000B4 AB                          stosw
+   358                                      ; If this is a one byte opcode, then decrement di. This effectively makes
+   359                                      ; the stosw above act as a stosb, since the high 0 byte will be overwritten
+   360                                      ; by the immediate below.
+   361 000000B5 20E4                        and ah,ah
+   362 000000B7 7501                        jnz .jmp_and_call_two_bytes
+   363 000000B9 4F                          dec di
+   364                                  .jmp_and_call_two_bytes:
+   365                                      ; Hash the label and add it to the fixup table.
+   366 000000BA E89800                      call hash_pre
+   367 000000BD B640                        mov dh,fixup_table >> 8
+   368 000000BF E8BAFF                      call add_table
+   369                                      ; Add a fixup hint of -2. (This effectively creates a relative relocation,
+   370                                      ; see done.fixup_labels for details.)
+   371 000000C2 B8FEFF                      mov ax,0o177776
+   372 000000C5 AB                          stosw
+   373 000000C6 C3                          ret
+   374                                  .jmp_and_call_end:
+   375                                  
+   376                                  ;; Deals with single-byte no argument instructions, encoded as just the opcode.
+   377                                  parse_10:
+   378                                      ; Note we don't need to set si or bp here.
+   379                                      ; If the lookup above fails, then si points to one after jmp_and_call_table
+   380                                      ; (i.e., table10), and bp is still correctly saved.
+   381 000000C7 E87D00                      call lookup
+   382 000000CA 7302                        jnc .parse_10_end
+   383 000000CC AA                          stosb
+   384 000000CD C3                          ret
+   385                                  .parse_10_end:
+   386                                  
+   387                                  ;; Deals with single-byte single-register instructions, encoded as just the
+   388                                  ;; opcode plus a register number.
+   389                                  parse_11:
+   390 000000CE E87600                      call lookup
+   391 000000D1 730D                        jnc parse_11_end
+   392 000000D3 50                          push ax
+   393 000000D4 E86800                      call accept_register
+   394 000000D7 5A                          pop dx
+   395 000000D8 7304                        jnc error
+   396 000000DA 01D0                        add ax,dx
+   397 000000DC AA                          stosb
+   398 000000DD C3                          ret
+   399                                  
+   400                                  ;; Exits. This is here (in the middle of the instruction parsing) in order to
+   401                                  ;; save a couple of bytes. Jumps which are more than 128 bytes away typically
+   402                                  ;; require an extra two bytes, by putting the error label in the middle, we
+   403                                  ;; ensure that all of the instruction parsers can jump to it without incurring
+   404                                  ;; this extra cost.
+   405                                  error:
+   406 000000DE CD20                        int int_exit
+   407                                  parse_11_end:
+   408                                  
+   409                                  ;; Deals with instructions which take two arguments: either a
+   410                                  ;; register-register, or a register-immediate. This also handles the case of
+   411                                  ;; register-label (which is encoded as an absolute relocation of a
+   412                                  ;; register-immediate).
+   413                                  ;;
+   414                                  ;; This is the trickiest case, consult an Intel manual for details.
+   415                                  parse_2x:
+   416 000000E0 E86400                      call lookup
+   417 000000E3 735A                        jnc .parse_2x_end
+   418                                      ; Save the opcode into dx.
+   419 000000E5 89C2                        mov dx,ax
+   420                                  
+   421                                      ; The first argument MUST be a register, regardless.
+   422 000000E7 E85500                      call accept_register
+   423                                      ; (Note accept_register clobbers the comma in ax.)
+   424 000000EA 73F2                        jnc error
+   425                                  
+   426                                      ; Check if this is a 16-bit register or an 8-bit register.
+   427 000000EC 3C08                        cmp al,0o10
+   428 000000EE 7201                        jb .is_byte
+   429                                      ; If it's a 16-bit register, increment (set the LSB) of dx.
+   430 000000F0 42                          inc dx
+   431                                  .is_byte:
+   432                                      ; Get rid of the high bit (corresponding to whether this is 16- or 8- bit).
+   433 000000F1 2407                        and al,0o7
+   434                                  
+   435                                      ; Try to get another register.
+   436 000000F3 50                          push ax
+   437 000000F4 56                          push si
+   438 000000F5 E84700                      call accept_register
+   439                                      ; (Note accept_register clobbers the newline in ax.)
+   440                                      ; If it's not a register, it must be an immediate or a label.
+   441 000000F8 730F                        jnc .parse_2x_immediate
+   442                                  
+   443                                      ; In this case, we are parsing a register-register instruction.
+   444                                      ; We store this as:
+   445                                      ;     - opcode (1 byte)
+   446                                      ;     - Mod R/M byte (1 byte)
+   447                                  
+   448                                      ; The parse was successful, so we need to clean the old si from the stack.
+   449                                      ; We don't use cx from now on, so pop into it.
+   450 000000FA 59                          pop cx
+   451                                  
+   452                                      ; Compute the Mod R/M byte:
+   453                                      ;     11 src[0:3] dst[0:3]
+   454                                      ; where src and dst are the register numbers.
+   455                                      ; Right now ax=src, and dst is on the top of stack.
+   456                                  
+   457                                      ; Shifting up by three here can overflow the second MSB, but it's
+   458                                      ; overwritten below anyway.
+   459 000000FB C0E003                      shl al,0o3
+   460                                      ; Note that we always set the top two bits, as we only support register
+   461                                      ; addressing here.
+   462 000000FE 0CC0                        or al,0o300
+   463                                  
+   464                                      ; Get the destination register off the stack.
+   465 00000100 5B                          pop bx
+   466 00000101 08C3                        or bl,al
+   467                                      ; Opcode byte
+   468 00000103 88D0                        mov al,dl
+   469                                      ; Mod R/M byte
+   470 00000105 88DC                        mov ah,bl
+   471 00000107 AB                          stosw
+   472 00000108 C3                          ret
+   473                                  
+   474                                  .parse_2x_immediate:
+   475                                      ; Backtrack to point to the immediate / label.
+   476 00000109 5E                          pop si
+   477                                  
+   478                                      ; In the immediate case, the opcode byte is USUALLY reusable as the Mod R/M
+   479                                      ; byte. (The exception is the case when we have a MOV instruction.) First,
+   480                                      ; we can remove the LSB for the opcode byte (which indicates if the
+   481                                      ; instruction operates on 8-bit or 16-bit registers). The middle three
+   482                                      ; bits of this opcode byte select the correct operation for all Group 1
+   483                                      ; instructions.
+   484                                  
+   485                                      ; The top of our lookup table stores the corresponding opcode for immediate
+   486                                      ; version of the instruction.
+   487 0000010A 88F0                        mov al,dh
+   488 0000010C 3C80                        cmp al,0o200
+   489 0000010E 7403                        je .parse_group1_immediate
+   490                                  
+   491                                      ; In the case its a MOV instruction, we kill the old top bits of the
+   492                                      ; opcode. This effectively allows us to reuse the opcode byte for Group 1
+   493                                      ; instructions, and makes the MOV instruction a "raw" encoding which uses
+   494                                      ; an opcode byte of 0. It also maintains whether this instruction is
+   495                                      ; supposed to operate on 8-bit or 16-bit registers, which is useful for bl
+   496                                      ; below.
+   497 00000110 80E201                      and dl,0o1
+   498                                  
+   499                                  .parse_group1_immediate:
+   500                                      ; bl will be 1 if we should use a 16-bit immediate, and 0 if we should use
+   501                                      ; an 8-bit immediate. It also encodes if this is operating on an 8-bit or
+   502                                      ; 16-bit register. Technically x86 makes a distinction between these two,
+   503                                      ; but we treat them the same (leading to longer but still valid instruction
+   504                                      ; encodings).
+   505 00000113 88D3                        mov bl,dl
+   506 00000115 80E301                      and bl,0o1
+   507 00000118 00D8                        add al,bl
+   508 0000011A AA                          stosb
+   509                                      ; Construct the Mod R/M byte using the old register.
+   510 0000011B 58                          pop ax
+   511 0000011C 00D0                        add al,dl
+   512                                      ; Clear off the last bit of the opcode.
+   513 0000011E 28D8                        sub al,bl
+   514                                      ; Set the top two bits of Mod R/M to indicate registers.
+   515 00000120 0CC0                        or al,0o300
+   516 00000122 AA                          stosb
+   517                                      ; Parse off the octal number.
+   518 00000123 56                          push si
+   519 00000124 E84200                      call odigit
+   520                                      ; If it's not an octal number, it must be a register.
+   521 00000127 7308                        jnc .parse_2x_label
+   522                                      ; The parse was successful, so we need to clean the old si from the stack.
+   523                                      ; We don't use cx from now on, so pop into it.
+   524 00000129 59                          pop cx
+   525                                  
+   526                                  .parse_2x_append_immediate:
+   527 0000012A AB                          stosw
+   528 0000012B 20DB                        and bl,bl
+   529 0000012D 7501                        jnz .parse_2x_word
+   530 0000012F 4F                          dec di
+   531                                  .parse_2x_word:
+   532 00000130 C3                          ret
+   533                                  .parse_2x_label:
+   534                                      ; Backtrack.
+   535 00000131 5E                          pop si
+   536                                      ; Get the hash of this label.
+   537 00000132 E82000                      call hash_pre
+   538 00000135 B640                        mov dh,fixup_table >> 8
+   539 00000137 E842FF                      call add_table
+   540                                      ; We want to add a value to the relocation such that, when di is added by
+   541                                      ; the fixup, it will correspond to the absolute address of the loaded
+   542                                      ; label. This is the start of the output buffer (output_start), minus the
+   543                                      ; actual location the binary will start (0x7c00).
+   544 0000013A 80C40F                      add ah,0o17
+   545 0000013D AB                          stosw
+   546 0000013E C3                          ret
+   547                                  .parse_2x_end:
+   548                                  
+   549                                  ;; Accept a register pointed to by the buffer.
+   550                                  ;;
+   551                                  ;; Inputs:
+   552                                  ;;   al is the first character in the buffer.
+   553                                  ;;   si is a buffer pointing to the input after al.
+   554                                  ;; Outputs:
+   555                                  ;;   ax is DESTROYED. It now indicates the register number and does not point
+   556                                  ;;      to the buffer, therefore ignoring the character after this register.
+   557                                  ;;   bx is clobbered.
+   558                                  ;;   bp is clobbered.
+   559                                  ;;   si is consumed.
+   560                                  accept_register:
+   561 0000013F E81300                      call hash_pre
+   562 00000142 89F5                        mov bp,si
+   563 00000144 BE0060                      mov si,register_table
+   564                                      ; FALLTHROUGH to lookup (saves us two bytes)
+   565                                  
+   566                                  ;; Lookup in the given table. A table is an array of key-value pairs, where
+   567                                  ;; each key and value occupies a single word. The keys must be non-zero,
+   568                                  ;; because a zero key is reserved to indicate the end. The table must be
+   569                                  ;; terminated by a zero key.
+   570                                  ;;
+   571                                  ;; Inputs:
+   572                                  ;;   cx is the key to lookup.
+   573                                  ;;   si points to the first key of the table.
+   574                                  ;;   bp is the old value of si.
+   575                                  ;; Outputs:
+   576                                  ;;   ax is the returned value, or 0 on failure.
+   577                                  ;;   si is modified.
+   578                                  ;;      if the lookup is successful, it is set to bp.
+   579                                  ;;      if the lookup fails, it points one word after the end of the table.
+   580                                  ;;   carry flag is set iff the lookup was successful.
+   581                                  ;;   
+   582                                  lookup:
+   583 00000147 AD                          lodsw
+   584 00000148 21C0                        and ax,ax
+   585 0000014A 7408                        jz .lookup_not_found
+   586                                  .lookup_keep_going:
+   587 0000014C 39C8                        cmp ax,cx
+   588 0000014E AD                          lodsw
+   589 0000014F 75F6                        jne lookup
+   590                                  .lookup_done:
+   591 00000151 F9                          stc
+   592 00000152 89EE                        mov si,bp
+   593                                  .lookup_not_found:
+   594 00000154 C3                          ret
+   595                                  
+   596                                  ;; Compute a hash for table indexing. Stops at the first non-identifier
+   597                                  ;; character after al, consuming all characters and incrementing si.
+   598                                  ;;
+   599                                  ;; Inputs:
+   600                                  ;;   al is the first character in the buffer.
+   601                                  ;;   si is a buffer pointing to the input after al.
+   602                                  ;; Outputs:
+   603                                  ;;   al is consumed.
+   604                                  ;;   si is consumed.
+   605                                  ;;   bx is clobbered.
+   606                                  ;;   cx is the returned hash value.
+   607                                  hash_pre:
+   608 00000155 AC                          lodsb
+   609                                  hash:
+   610 00000156 B92300                      mov cx,0o43
+   611                                  .hash_loop:
+   612                                      ; Using cbw here lets us use ax as al, which we need (because we want to
+   613                                      ; use the full 16-bit for the hash to reduce collisions).
+   614 00000159 98                          cbw
+   615                                      ; cx = 31 * cx + (next character)
+   616 0000015A 89CB                        mov bx,cx
+   617 0000015C C1E105                      shl cx,0o5
+   618 0000015F 29D9                        sub cx,bx
+   619 00000161 01C1                        add cx,ax
+   620 00000163 AC                          lodsb
+   621                                      ; Stop if we see a non-identifier character.
+   622 00000164 3C40                        cmp al,'@'
+   623 00000166 7FF1                        jg .hash_loop
+   624 00000168 C3                          ret
+   625                                  
+   626                                  ;; Convert ASCII octal.
+   627                                  ;; The representation must start with "0o".
+   628                                  ;; Inputs:
+   629                                  ;;   al is the first character in the buffer.
+   630                                  ;;   si is a buffer pointing to the input after al.
+   631                                  ;; Outputs:
+   632                                  ;;   ax is the returned value. It is clobbered if the parse fails.
+   633                                  ;;   cx is clobbered.
+   634                                  ;;   si is consumed.
+   635                                  ;;   the carry flag is set if the parse is successful.
+   636                                  odigit:
+   637 00000169 AC                          lodsb
+   638 0000016A 3C30                        cmp al,'0'
+   639 0000016C 750F                        jne .odigit_bad
+   640                                      ;! Error checking on o removed for byte count.
+   641 0000016E AC                          lodsb
+   642 0000016F 31C9                        xor cx,cx
+   643                                  .odigit_loop:
+   644 00000171 AC                          lodsb
+   645                                      ; Convert by subtracting off ASCII 0.
+   646 00000172 2C30                        sub al,'0'
+   647                                      ; Note if al < '0', then CF is set to 1. This indicates we are now dealing
+   648                                      ; with a whitespace character, and the parse was successful.
+   649                                      ;! We don't check that the value is not too large.
+   650 00000174 7208                        jb .odigit_good
+   651 00000176 C1E103                      shl cx,0o3
+   652                                      ; Note that the bottom three bits of cl are zero and al is at most 0o7,
+   653                                      ; so adding only the lower bytes here is fine; we never overflow cl.
+   654 00000179 00C1                        add cl,al
+   655 0000017B EBF4                        jmp .odigit_loop
+   656                                  .odigit_bad:
+   657                                      ; Clear the carry flag to show parse was bad.
+   658 0000017D F8                          clc
+   659                                  .odigit_good:
+   660 0000017E 89C8                        mov ax,cx
+   661 00000180 C3                          ret
+   662                                  
+   663                                  ;; THESE TABLES MUST APPEAR IN THIS ORDER. ;;
+   664                                  
+   665                                  ;; Lookup table for jump and call instructions (anything requiring relative
+   666                                  ;; relocation with 16-bit addresses). Keys are the hashes, and values are the
+   667                                  ;; opcode, which may be multiple bytes long.
+   668                                  jmp_and_call_table:
+   669                                      ; call
+   670 00000181 01B1                        dw 0o130401
+   671 00000183 E800                        dw 0o350
+   672                                      ; jmp
+   673 00000185 8A84                        dw 0o102212
+   674 00000187 E900                        dw 0o351
+   675                                      ; jb
+   676 00000189 9B90                        dw 0o110233
+   677 0000018B 0F82                        dw 0o101017
+   678                                      ; jnb
+   679 0000018D 9B84                        dw 0o102233
+   680 0000018F 0F83                        dw 0o101417
+   681                                      ; jz
+   682 00000191 B390                        dw 0o110263
+   683 00000193 0F84                        dw 0o102017
+   684                                      ; jnz
+   685 00000195 B384                        dw 0o102263
+   686 00000197 0F85                        dw 0o102417
+   687                                      ; jbe
+   688 00000199 2A83                        dw 0o101452
+   689 0000019B 0F86                        dw 0o103017
+   690                                      ; jnbe
+   691 0000019D 2A0F                        dw 0o7452
+   692 0000019F 0F87                        dw 0o103417
+   693                                      ; NOT FOUND
+   694 000001A1 0000                        dw 0o0
+   695                                  
+   696                                  ;; Lookup table for instructions which take up one byte and have no arguments.
+   697                                  ;; Keys here are the hashes, values are simply the opcode.
+   698                                  table10:
+   699                                      ; stosb
+   700 000001A3 BA96                        dw 0o113272
+   701 000001A5 AA00                        dw 0o252
+   702                                      ; stosw
+   703 000001A7 CF96                        dw 0o113317
+   704 000001A9 AB00                        dw 0o253
+   705                                      ; lodsb
+   706 000001AB 0D83                        dw 0o101415
+   707 000001AD AC00                        dw 0o254
+   708                                      ; lodsw
+   709 000001AF 2283                        dw 0o101442
+   710 000001B1 AD00                        dw 0o255
+   711                                      ; ret
+   712 000001B3 9EA1                        dw 0o120636
+   713 000001B5 C300                        dw 0o303
+   714                                      ; cbw
+   715 000001B7 F568                        dw 0o64365
+   716 000001B9 9800                        dw 0o230
+   717                                      ; NOT FOUND
+   718 000001BB 0000                        dw 0o0
+   719                                  
+   720                                  ;; Lookup table for instructions with one opcode byte and one argument.
+   721                                  ;; Keys here are the hashes. Values are the opcode which will be added to
+   722                                  ;; (note that because we start numbering 16-bit registers at 0x8, most of
+   723                                  ;; the values here are shifted down by 0x8).
+   724                                  table11:
+   725                                      ; push
+   726 000001BD BDE5                        dw 0o162675
+   727                                      ; Nasty trick here. We overlap infile and outfile with the push and pop
+   728                                      ; opcodes respectively. This makes our input filename "H" and our output
+   729                                      ; filename "P", and saves us three bytes.
+   730                                  infile:
+   731 000001BF 4800                        dw 0o110
+   732                                      ; pop
+   733 000001C1 4E9B                        dw 0o115516
+   734                                  outfile:
+   735 000001C3 5000                        dw 0o120
+   736                                      ;!; inc
+   737                                      ;!dw 0o100333
+   738                                      ;!dw 0o70
+   739                                      ;!; dec
+   740                                      ;!dw 0o66377
+   741                                      ;!dw 0o100
+   742                                      ; NOT FOUND
+   743 000001C5 0000                        dw 0o0
+   744                                  
+   745                                  ;; Lookup table for instructions which take two arguments. Keys here are the
+   746                                  ;; hashes. Values have two parts: the low-byte is the opcode byte for
+   747                                  ;; non-immediate (register/register) forms, while the the high-byte is the
+   748                                  ;; opcode for the immediate (register/immediate) form.
+   749                                  table2x:
+   750                                      ; add
+   751 000001C7 9E61                        dw 0o60636
+   752 000001C9 0080                        dw 0o100000
+   753                                      ; and
+   754 000001CB D462                        dw 0o61324
+   755 000001CD 2080                        dw 0o100040
+   756                                      ; xor
+   757 000001CF 58B9                        dw 0o134530
+   758 000001D1 3080                        dw 0o100060
+   759                                      ; cmp
+   760 000001D3 436A                        dw 0o65103
+   761 000001D5 3880                        dw 0o100070
+   762                                      ; mov
+   763 000001D7 1190                        dw 0o110021
+   764 000001D9 88C6                        dw 0o143210
+   765                                      ; NOT FOUND
+   766 000001DB 0000                        dw 0o0
+   767                                  
+   768                                  ;; The "partial" register table contains only keys -- no values. The actual
+   769                                  ;; register table is initialized using this and initialize_register_table.
+   770                                  partial_register_table:
+   771                                      ; al
+   772 000001DD 8E8F                        dw 0o107616
+   773                                      ; cl
+   774 000001DF CC8F                        dw 0o107714
+   775                                      ; dl
+   776 000001E1 EB8F                        dw 0o107753
+   777                                      ; bl
+   778 000001E3 AD8F                        dw 0o107655
+   779                                      ; ah
+   780 000001E5 8A8F                        dw 0o107612
+   781                                      ; ch
+   782 000001E7 C88F                        dw 0o107710
+   783                                      ; dh
+   784 000001E9 E78F                        dw 0o107747
+   785                                      ; bh
+   786 000001EB A98F                        dw 0o107651
+   787                                      ; ax
+   788 000001ED 9A8F                        dw 0o107632
+   789                                      ; cx
+   790 000001EF D88F                        dw 0o107730
+   791                                      ; dx
+   792 000001F1 F78F                        dw 0o107767
+   793                                      ; bx
+   794 000001F3 B98F                        dw 0o107671
+   795                                      ; sp
+   796 000001F5 C091                        dw 0o110700
+   797                                      ; bp
+   798 000001F7 B18F                        dw 0o107661
+   799                                      ; si
+   800 000001F9 B991                        dw 0o110671
+   801                                      ; di
+   802 000001FB E88F                        dw 0o107750
+   803                                      ; NOT FOUND
+   804 000001FD 0000                        dw 0o0
+   805                                  
+   806                                  bytes_left_message:
+   807                                  %assign bytes_left 0o1000-($-$$)
+   808                                  %warning Have bytes_left bytes left.
+   808          ******************       warning: Have 1 bytes left. [-w+user]
+   809 000001FF 90                      times bytes_left db 0o220
