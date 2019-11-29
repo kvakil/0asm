@@ -404,14 +404,16 @@ parse_2x:
     call lookup
 done_error_chain_2:
     jnc done_error_chain_1
-    ; Save the opcode into dx.
-    mov dx,ax
-
+    ; Save the opcode.
+    push ax
     ; The first argument MUST be a register, regardless.
     call accept_register
     ; (Note accept_register clobbers the comma in ax.)
 done_error_chain_3:
     jnc done_error_chain_2
+
+    ; Restore opcode in dx.
+    pop dx
 
     ; Check if this is a 16-bit register or an 8-bit register.
     cmp al,0o10
