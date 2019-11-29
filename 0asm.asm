@@ -404,7 +404,7 @@ parse_11_end:
 ;; This is the trickiest case, consult an Intel manual for details.
 parse_2x:
     call lookup
-    jnc .parse_2x_end
+    jnc error
     ; Save the opcode into dx.
     mov dx,ax
 
@@ -493,7 +493,9 @@ parse_2x:
     ; but we treat them the same (leading to longer but still valid instruction
     ; encodings).
     mov bl,dl
-    and bl,0o1
+    ; We use bl for the most part, but we need bx later (just for
+    ; .parse_2x_append_immediate).
+    and bx,0o1
     add al,bl
     stosb
     ; Construct the Mod R/M byte using the old register.
@@ -514,12 +516,16 @@ parse_2x:
     pop cx
 
 .parse_2x_append_immediate:
+    ; Blindly store both bytes of the immediate.
     stosw
-    and bl,bl
-    jnz .parse_2x_word
-    dec di
-.parse_2x_word:
+    ; If bx = 0, we want to decrement di, so that we effectively store only
+    ; one byte of the immediate.
+    ; If bx = 1, then we don't want to change di.
+    ; Because we have bx available, this is shorter than the similar code in
+    ; jmp_and_call.jmp_and_call_match.
+    lea di,[di+bx-1]
     ret
+
 .parse_2x_label:
     ; Backtrack.
     pop si
@@ -534,7 +540,6 @@ parse_2x:
     add ah,0o17
     stosw
     ret
-.parse_2x_end:
 
 ;; Accept a register pointed to by the buffer.
 ;;
