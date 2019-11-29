@@ -386,9 +386,9 @@ parse_11:
     jnc parse_11_end
     push ax
     call accept_register
-    pop dx
 done_error_chain_1:
     jnc done_error_chain_0
+    pop dx
     add ax,dx
     stosb
     ret
