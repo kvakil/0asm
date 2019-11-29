@@ -135,7 +135,7 @@ initialize_tables:
     ; In any case, error-checking is definitely not the priority of this
     ; assembler...
     mov ch,0o57
-    mov al,0o0
+    xor ax,ax
     rep stosb
 
 ;; Unlike other tables, the register table is generated at runtime, since the
@@ -144,17 +144,19 @@ initialize_register_table:
     ; It's shorter to do this manually than to use add_table.
     mov si,partial_register_table
     mov di,register_table
-    ; cx is zero from the rep stosb in initialize_tables.
+    ; ax is zero from above.
 .initialize_register_table_loop:
-    lodsw
-    and ax,ax
+    ; Copy over partial register table key.
+    movsw
+    ; Store the index of this register.
     stosw
-    ; Stop when we reach the end of the partial_register_table.
-    jz .initialize_register_table_end
-    mov ax,cx
-    stosw
-    inc cx
-    jmp .initialize_register_table_loop
+    inc ax
+    ; If al == 16, then we've finished copying partial_register_table.
+    ; From initialize_tables above, we know that this table was zero.
+    ; It is important that we don't overwrite this final zero entry, since
+    ; we are using it as a sentinel value.
+    cmp al,0o20
+    jne .initialize_register_table_loop
 .initialize_register_table_end:
 
 ;; Initialize si to point to the input buffer and di to point to the output
@@ -289,10 +291,12 @@ add_to_label:
 ;; Add (cx, di) to the table at cx.
 ;; Inputs:
 ;;   cx is the key to write.
-;;   dx is the address of the table to write to. It MUST be 256 B aligned.
+;;   dh is the (high part) of the address of the table to write to.
+;;      the low part will be ignored and zero'd out.
 ;;   di is the value to write.
 ;; Outputs:
 ;;   ax is clobbered to the initial value of di.
+;;   dl is set to zero.
 add_table:
     ; Save old values.
     push si
@@ -800,8 +804,7 @@ partial_register_table:
     dw 0o110671
     ; di
     dw 0o107750
-    ; NOT FOUND
-    dw 0o0
+    ; NOT FOUND not required.
 
 bytes_left_message:
 %assign bytes_left 0o1000-($-$$)
