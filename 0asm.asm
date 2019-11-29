@@ -480,7 +480,7 @@ done_error_chain_3:
     cmp al,0o200
     je .parse_group1_immediate
 
-    ; In the case its a MOV instruction, we kill the old top bits of the
+    ; In this case it's a MOV instruction, we kill the old top bits of the
     ; opcode. This effectively allows us to reuse the opcode byte for Group 1
     ; instructions, and makes the MOV instruction a "raw" encoding which uses
     ; an opcode byte of 0. It also maintains whether this instruction is
