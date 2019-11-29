@@ -416,13 +416,21 @@ done_error_chain_3:
     pop dx
 
     ; Check if this is a 16-bit register or an 8-bit register.
-    cmp al,0o10
-    jb .is_byte
-    ; If it's a 16-bit register, increment (set the LSB) of dx.
-    inc dx
-.is_byte:
-    ; Get rid of the high bit (corresponding to whether this is 16- or 8- bit).
-    and al,0o7
+    ; bl will be 1 if we should use a 16-bit immediate, and 0 if we should use
+    ; an 8-bit immediate. It also encodes if this is operating on an 8-bit or
+    ; 16-bit register. Technically x86 makes a distinction between these two,
+    ; but we treat them the same (leading to longer but still valid instruction
+    ; encodings).
+
+    ; Move 4th bit into carry flag.
+    shl al,0o5
+    ; Set bx to the carry flag.
+    adc bx,0o0
+    ; Make al the same as before, except without 4th bit set.
+    shr al,0o5
+
+    ; Set LSB of opcode byte correctly.
+    add dl,bl
 
     ; Try to get another register.
     push ax
@@ -454,12 +462,12 @@ done_error_chain_3:
     or al,0o300
 
     ; Get the destination register off the stack.
-    pop bx
-    or bl,al
+    pop cx
+    or cl,al
     ; Opcode byte
     mov al,dl
     ; Mod R/M byte
-    mov ah,bl
+    mov ah,cl
     stosw
     ret
 
@@ -486,18 +494,9 @@ done_error_chain_3:
     ; an opcode byte of 0. It also maintains whether this instruction is
     ; supposed to operate on 8-bit or 16-bit registers, which is useful for bl
     ; below.
-    and dl,0o1
+    mov dl,bl
 
 .parse_group1_immediate:
-    ; bl will be 1 if we should use a 16-bit immediate, and 0 if we should use
-    ; an 8-bit immediate. It also encodes if this is operating on an 8-bit or
-    ; 16-bit register. Technically x86 makes a distinction between these two,
-    ; but we treat them the same (leading to longer but still valid instruction
-    ; encodings).
-    mov bl,dl
-    ; We use bl for the most part, but we need bx later (just for
-    ; .parse_2x_append_immediate).
-    and bx,0o1
     add al,bl
     stosb
     ; Construct the Mod R/M byte using the old register.
@@ -525,7 +524,8 @@ done_error_chain_3:
     ; If bx = 1, then we don't want to change di.
     ; Because we have bx available, this is shorter than the similar code in
     ; jmp_and_call.jmp_and_call_match.
-    lea di,[di+bx-1]
+    add di,bx
+    dec di
     ret
 
 .parse_2x_label:
@@ -599,7 +599,6 @@ lookup:
 ;; Outputs:
 ;;   al is consumed.
 ;;   si is consumed.
-;;   bx is clobbered.
 ;;   cx is the returned hash value.
 hash_pre:
     lodsb
@@ -610,10 +609,10 @@ hash:
     ; use the full 16-bit for the hash to reduce collisions).
     cbw
     ; cx = 31 * cx + (next character)
-    mov bx,cx
+    sub ax,cx
+    neg ax
     shl cx,0o5
-    sub cx,bx
-    add cx,ax
+    sub cx,ax
     lodsb
     ; Stop if we see a non-identifier character.
     cmp al,'@'
