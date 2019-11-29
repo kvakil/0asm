@@ -1,5 +1,5 @@
 .PHONY: all
-all: 0asm.bin os.img hash README.md
+all: 0asm.bin os.img README.md
 
 0asm.o 0asm.lst: 0asm.asm
 	nasm -f elf32 -g3 -F dwarf 0asm.asm -l 0asm.lst -o 0asm.o
@@ -21,8 +21,6 @@ os.img: osbase.img 0asm.bin test.asm
 README.md: 0asm.asm
 	sed -n 's/;;; \?\(.*\)/\1/p' $^ > $@
 
-hash: hash.c
-
 .PHONY: run
 run: os.img
 	qemu-system-i386 \
@@ -42,4 +40,4 @@ gdbdebug: os.img
 
 .PHONY: clean
 clean:
-	rm -f os.img 0asm.lst 0asm.elf 0asm.o 0asm.bin hash README.md
+	rm -f os.img 0asm.lst 0asm.elf 0asm.o 0asm.bin README.md
