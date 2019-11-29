@@ -292,7 +292,7 @@ add_table:
     ; Save old values.
     push di
     xor dl,dl
-    ; Set si equal to the start of the table.
+    ; Set di equal to the start of the table.
     mov di,dx
     xor ax,ax
 .keep_scanning:
