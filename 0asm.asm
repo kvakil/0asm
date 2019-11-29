@@ -326,7 +326,12 @@ parse_int:
     stosb
 store_odigit_byte:
     call odigit
-    jnc error
+; This "jump chain" allows us to jump to a single statement (done_error), from
+; multiple places, without requiring long jumps (signed displacement greater
+; than one byte). Each individual jump in the chain is within 128 bytes of the
+; previous jump.
+done_error_chain_0:
+    jnc done_error
     stosb
     ret
 parse_int_end:
@@ -382,18 +387,11 @@ parse_11:
     push ax
     call accept_register
     pop dx
-    jnc error
+done_error_chain_1:
+    jnc done_error_chain_0
     add ax,dx
     stosb
     ret
-
-;; Exits. This is here (in the middle of the instruction parsing) in order to
-;; save a couple of bytes. Jumps which are more than 128 bytes away typically
-;; require an extra two bytes, by putting the error label in the middle, we
-;; ensure that all of the instruction parsers can jump to it without incurring
-;; this extra cost.
-error:
-    int int_exit
 parse_11_end:
 
 ;; Deals with instructions which take two arguments: either a
@@ -404,14 +402,16 @@ parse_11_end:
 ;; This is the trickiest case, consult an Intel manual for details.
 parse_2x:
     call lookup
-    jnc error
+done_error_chain_2:
+    jnc done_error_chain_1
     ; Save the opcode into dx.
     mov dx,ax
 
     ; The first argument MUST be a register, regardless.
     call accept_register
     ; (Note accept_register clobbers the comma in ax.)
-    jnc error
+done_error_chain_3:
+    jnc done_error_chain_2
 
     ; Check if this is a 16-bit register or an 8-bit register.
     cmp al,0o10
