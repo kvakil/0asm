@@ -106,14 +106,14 @@
 ;; easily added, but was removed so that the program fits in 512 bytes.
 
 bits 16
-fixup_table:    equ 0o40000
-symbol_table:   equ 0o50000
-register_table: equ 0o60000
-input_start:    equ 0o65400
-output_start:   equ 0o66400
-int_exit:       equ 0o40
-int_read_file:  equ 0o43
-int_save_file:  equ 0o44
+fixup_table:    equ 0x4000
+symbol_table:   equ 0x5000
+register_table: equ 0x6000
+input_start:    equ 0x6b00
+output_start:   equ 0x6d00
+int_exit:       equ 0x20
+int_read_file:  equ 0x23
+int_save_file:  equ 0x24
 
 %macro hash_s 1
 %assign hash_result 35
@@ -151,7 +151,7 @@ initialize_tables:
     ;
     ; In any case, error-checking is definitely not the priority of this
     ; assembler...
-    mov ch,0o57
+    mov ch,0x2f
     xor ax,ax
     rep stosb
 
@@ -172,7 +172,7 @@ initialize_register_table:
     ; From initialize_tables above, we know that this table was zero.
     ; It is important that we don't overwrite this final zero entry, since
     ; we are using it as a sentinel value.
-    cmp al,0o20
+    cmp al,0x10
     jne .initialize_register_table_loop
 .initialize_register_table_end:
 
@@ -340,7 +340,7 @@ parse_int:
     hash_s 'int'
     cmp cx,hash_result
     jne parse_int_end
-    mov al,0o315
+    mov al,0xcd
     stosb
 store_odigit_byte:
     call odigit
@@ -381,7 +381,7 @@ jmp_and_call:
     call add_table
     ; Add a fixup hint of -2. (This effectively creates a relative relocation,
     ; see done.fixup_labels for details.)
-    mov ax,0o177776
+    mov ax,0xfffe
     stosw
     ret
 .jmp_and_call_end:
@@ -441,11 +441,11 @@ done_error_chain_3:
     ; encodings).
 
     ; Move 4th bit into carry flag.
-    shl al,0o5
+    shl al,0x5
     ; Set bx to the carry flag.
-    adc bx,0o0
+    adc bx,0x0
     ; Make al the same as before, except without 4th bit set.
-    shr al,0o5
+    shr al,0x5
 
     ; Set LSB of opcode byte correctly.
     add dl,bl
@@ -474,10 +474,10 @@ done_error_chain_3:
 
     ; Shifting up by three here can overflow the second MSB, but it's
     ; overwritten below anyway.
-    shl al,0o3
+    shl al,0x3
     ; Note that we always set the top two bits, as we only support register
     ; addressing here.
-    or al,0o300
+    or al,0xc0
 
     ; Get the destination register off the stack.
     pop cx
@@ -503,7 +503,7 @@ done_error_chain_3:
     ; The top of our lookup table stores the corresponding opcode for immediate
     ; version of the instruction.
     mov al,dh
-    cmp al,0o200
+    cmp al,0x80
     je .parse_group1_immediate
 
     ; In this case it's a MOV instruction, we kill the old top bits of the
@@ -523,7 +523,7 @@ done_error_chain_3:
     ; Clear off the last bit of the opcode.
     sub al,bl
     ; Set the top two bits of Mod R/M to indicate registers.
-    or al,0o300
+    or al,0xc0
     stosb
     ; Parse off the octal number.
     push si
@@ -557,7 +557,7 @@ done_error_chain_3:
     ; the fixup, it will correspond to the absolute address of the loaded
     ; label. This is the start of the output buffer (output_start), minus the
     ; actual location the binary will start (0x7c00).
-    add ah,0o17
+    add ah,0xf
     stosw
     ret
 
@@ -621,7 +621,7 @@ lookup:
 hash_pre:
     lodsb
 hash:
-    mov cx,0o43
+    mov cx,0x23
 .hash_loop:
     ; Using cbw here lets us use ax as al, which we need (because we want to
     ; use the full 16-bit for the hash to reduce collisions).
@@ -629,7 +629,7 @@ hash:
     ; cx = 31 * cx + (next character)
     sub ax,cx
     neg ax
-    shl cx,0o5
+    shl cx,0x5
     sub cx,ax
     lodsb
     ; Stop if we see a non-identifier character.
@@ -662,8 +662,8 @@ odigit:
     ; with a whitespace character, and the parse was successful.
     ;! We don't check that the value is not too large.
     jb .odigit_good
-    shl cx,0o3
-    ; Note that the bottom three bits of cl are zero and al is at most 0o7,
+    shl cx,0x3
+    ; Note that the bottom three bits of cl are zero and al is at most 7,
     ; so adding only the lower bytes here is fine; we never overflow cl.
     add cl,al
     jmp .odigit_loop
@@ -681,41 +681,41 @@ odigit:
 ;; opcode, which may be multiple bytes long.
 jmp_and_call_table:
     dw_hash 'call'
-    dw 0o350
+    dw 0xe8
     dw_hash 'jmp'
-    dw 0o351
+    dw 0xe9
     dw_hash 'jb'
-    dw 0o101017
+    dw 0x820f
     dw_hash 'jnb'
-    dw 0o101417
+    dw 0x830f
     dw_hash 'jz'
-    dw 0o102017
+    dw 0x840f
     dw_hash 'jnz'
-    dw 0o102417
+    dw 0x850f
     dw_hash 'jbe'
-    dw 0o103017
+    dw 0x860f
     dw_hash 'jnbe'
-    dw 0o103417
+    dw 0x870f
     ; NOT FOUND
-    dw 0o0
+    dw 0x0
 
 ;; Lookup table for instructions which take up one byte and have no arguments.
 ;; Keys here are the hashes, values are simply the opcode.
 table10:
     dw_hash 'stosb'
-    dw 0o252
+    dw 0xaa
     dw_hash 'stosw'
-    dw 0o253
+    dw 0xab
     dw_hash 'lodsb'
-    dw 0o254
+    dw 0xac
     dw_hash 'lodsw'
-    dw 0o255
+    dw 0xad
     dw_hash 'ret'
-    dw 0o303
+    dw 0xc3
     dw_hash 'cbw'
-    dw 0o230
+    dw 0x98
     ; NOT FOUND
-    dw 0o0
+    dw 0x0
 
 ;; Lookup table for instructions with one opcode byte and one argument.
 ;; Keys here are the hashes. Values are the opcode which will be added to
@@ -727,16 +727,16 @@ table11:
     ; opcodes respectively. This makes our input filename "H" and our output
     ; filename "P", and saves us three bytes.
 infile:
-    dw 0o110
+    dw 0x48
     dw_hash 'pop'
 outfile:
-    dw 0o120
+    dw 0x50
     dw_hash 'inc'
-    dw 0o70
+    dw 0x38
     dw_hash 'dec'
-    dw 0o100
+    dw 0x40
     ; NOT FOUND
-    dw 0o0
+    dw 0x0
 
 ;; Lookup table for instructions which take two arguments. Keys here are the
 ;; hashes. Values have two parts: the low-byte is the opcode byte for
@@ -744,17 +744,17 @@ outfile:
 ;; opcode for the immediate (register/immediate) form.
 table2x:
     dw_hash 'add'
-    dw 0o100000
+    dw 0x8000
     dw_hash 'and'
-    dw 0o100040
+    dw 0x8020
     dw_hash 'xor'
-    dw 0o100060
+    dw 0x8030
     dw_hash 'cmp'
-    dw 0o100070
+    dw 0x8038
     dw_hash 'mov'
-    dw 0o143210
+    dw 0xc688
     ; NOT FOUND
-    dw 0o0
+    dw 0x0
 
 ;; The "partial" register table contains only keys -- no values. The actual
 ;; register table is initialized using this and initialize_register_table.
@@ -778,6 +778,6 @@ partial_register_table:
     ; NOT FOUND not required.
 
 bytes_left_message:
-%assign bytes_left 0o1000-($-$$)
+%assign bytes_left 0x200-($-$$)
 %warning Have bytes_left bytes left.
-times bytes_left db 0o220
+times bytes_left db 0x90
