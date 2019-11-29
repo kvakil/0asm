@@ -115,6 +115,23 @@ int_exit:       equ 0o40
 int_read_file:  equ 0o43
 int_save_file:  equ 0o44
 
+%macro hash_s 1
+%assign hash_result 35
+%strlen %%len %1
+%assign %%i 1
+%rep %%len
+%substr %%ch %1 %%i
+%assign hash_result (31 * hash_result + %%ch)
+%assign hash_result (hash_result & 0xffff)
+%assign %%i (%%i+1)
+%endrep
+%endmacro
+
+%macro dw_hash 1
+hash_s %1
+dw hash_result
+%endmacro
+
 global _start
 _start:
 
@@ -313,14 +330,15 @@ add_to_label_end:
 
     ; db
 parse_db:
-    ; The immediate is the hash of the string "db".
-    cmp cx,0o107741
+    hash_s 'db'
+    cmp cx,hash_result
     je store_odigit_byte
 .parse_db_end:
 
     ; int
 parse_int:
-    cmp cx,0o100354
+    hash_s 'int'
+    cmp cx,hash_result
     jne parse_int_end
     mov al,0o315
     stosb
@@ -662,29 +680,21 @@ odigit:
 ;; relocation with 16-bit addresses). Keys are the hashes, and values are the
 ;; opcode, which may be multiple bytes long.
 jmp_and_call_table:
-    ; call
-    dw 0o130401
+    dw_hash 'call'
     dw 0o350
-    ; jmp
-    dw 0o102212
+    dw_hash 'jmp'
     dw 0o351
-    ; jb
-    dw 0o110233
+    dw_hash 'jb'
     dw 0o101017
-    ; jnb
-    dw 0o102233
+    dw_hash 'jnb'
     dw 0o101417
-    ; jz
-    dw 0o110263
+    dw_hash 'jz'
     dw 0o102017
-    ; jnz
-    dw 0o102263
+    dw_hash 'jnz'
     dw 0o102417
-    ; jbe
-    dw 0o101452
+    dw_hash 'jbe'
     dw 0o103017
-    ; jnbe
-    dw 0o7452
+    dw_hash 'jnbe'
     dw 0o103417
     ; NOT FOUND
     dw 0o0
@@ -692,23 +702,17 @@ jmp_and_call_table:
 ;; Lookup table for instructions which take up one byte and have no arguments.
 ;; Keys here are the hashes, values are simply the opcode.
 table10:
-    ; stosb
-    dw 0o113272
+    dw_hash 'stosb'
     dw 0o252
-    ; stosw
-    dw 0o113317
+    dw_hash 'stosw'
     dw 0o253
-    ; lodsb
-    dw 0o101415
+    dw_hash 'lodsb'
     dw 0o254
-    ; lodsw
-    dw 0o101442
+    dw_hash 'lodsw'
     dw 0o255
-    ; ret
-    dw 0o120636
+    dw_hash 'ret'
     dw 0o303
-    ; cbw
-    dw 0o64365
+    dw_hash 'cbw'
     dw 0o230
     ; NOT FOUND
     dw 0o0
@@ -718,23 +722,19 @@ table10:
 ;; (note that because we start numbering 16-bit registers at 0x8, most of
 ;; the values here are shifted down by 0x8).
 table11:
-    ; push
-    dw 0o162675
+    dw_hash 'push'
     ; Nasty trick here. We overlap infile and outfile with the push and pop
     ; opcodes respectively. This makes our input filename "H" and our output
     ; filename "P", and saves us three bytes.
 infile:
     dw 0o110
-    ; pop
-    dw 0o115516
+    dw_hash 'pop'
 outfile:
     dw 0o120
-    ;!; inc
-    ;!dw 0o100333
-    ;!dw 0o70
-    ;!; dec
-    ;!dw 0o66377
-    ;!dw 0o100
+    dw_hash 'inc'
+    dw 0o70
+    dw_hash 'dec'
+    dw 0o100
     ; NOT FOUND
     dw 0o0
 
@@ -743,20 +743,15 @@ outfile:
 ;; non-immediate (register/register) forms, while the the high-byte is the
 ;; opcode for the immediate (register/immediate) form.
 table2x:
-    ; add
-    dw 0o60636
+    dw_hash 'add'
     dw 0o100000
-    ; and
-    dw 0o61324
+    dw_hash 'and'
     dw 0o100040
-    ; xor
-    dw 0o134530
+    dw_hash 'xor'
     dw 0o100060
-    ; cmp
-    dw 0o65103
+    dw_hash 'cmp'
     dw 0o100070
-    ; mov
-    dw 0o110021
+    dw_hash 'mov'
     dw 0o143210
     ; NOT FOUND
     dw 0o0
@@ -764,38 +759,22 @@ table2x:
 ;; The "partial" register table contains only keys -- no values. The actual
 ;; register table is initialized using this and initialize_register_table.
 partial_register_table:
-    ; al
-    dw 0o107616
-    ; cl
-    dw 0o107714
-    ; dl
-    dw 0o107753
-    ; bl
-    dw 0o107655
-    ; ah
-    dw 0o107612
-    ; ch
-    dw 0o107710
-    ; dh
-    dw 0o107747
-    ; bh
-    dw 0o107651
-    ; ax
-    dw 0o107632
-    ; cx
-    dw 0o107730
-    ; dx
-    dw 0o107767
-    ; bx
-    dw 0o107671
-    ; sp
-    dw 0o110700
-    ; bp
-    dw 0o107661
-    ; si
-    dw 0o110671
-    ; di
-    dw 0o107750
+    dw_hash 'al'
+    dw_hash 'cl'
+    dw_hash 'dl'
+    dw_hash 'bl'
+    dw_hash 'ah'
+    dw_hash 'ch'
+    dw_hash 'dh'
+    dw_hash 'bh'
+    dw_hash 'ax'
+    dw_hash 'cx'
+    dw_hash 'dx'
+    dw_hash 'bx'
+    dw_hash 'sp'
+    dw_hash 'bp'
+    dw_hash 'si'
+    dw_hash 'di'
     ; NOT FOUND not required.
 
 bytes_left_message:
