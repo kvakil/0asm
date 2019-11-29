@@ -299,29 +299,24 @@ add_to_label:
 ;;   dl is set to zero.
 add_table:
     ; Save old values.
-    push si
     push di
     xor dl,dl
     ; Set si equal to the start of the table.
-    mov si,dx
-.add_table_nonzero:
-    ; Find first zero value.
-    lodsw
-    and ax,ax
-    jnz .add_table_nonzero
-    ; Make di actually point to the zero value.
-    mov di,si
+    mov di,dx
+    xor ax,ax
+.keep_scanning:
+    scasw
+    jnz .keep_scanning
     ; Decrementing twice is shorter than subtracting 2.
     dec di
     dec di
     ; Store the key-value pair.
     mov ax,cx
     stosw
-    ; Pop old di into ax for stosw.
+    ; Pop old di into ax to store correct value.
     pop ax
     stosw
     mov di,ax
-    pop si
     ret
 add_to_label_end:
 
