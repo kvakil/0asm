@@ -1,9 +1,12 @@
 mov si,message
+xor ax,ax
 lp:
     lodsb
+    push si
     push ax
     int 0o42
     pop ax
+    pop si
     and al,al
     jnz lp
     int 0o40
