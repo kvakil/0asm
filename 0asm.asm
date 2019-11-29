@@ -30,13 +30,13 @@
 ;;; relocations), and octal literals (but only octal literals). It also
 ;;; supports all 16-bit x86 general purpose registers, but does not support
 ;;; segment registers.
-;;; 
+;;;
 ;;; Many jump instructions are supported (call, jmp, jb, jnb, jz, jnz, jbe,
-;;; jnbe), along with several memory addressing instructions (stosb, stosw,
-;;; lodsb, lodsw, cbw), several stack instructions (push, pop, ret), a
-;;; few fundamental arithmetic instructions in both register/register and
-;;; register/immediate form (add, and, xor, cmp, mov), and some special
-;;; instructions (int, the pseudo-instruction db).
+;;; jnbe), along with several string instructions (stosb, stosw, lodsb, lodsw,
+;;; movsw, cbw, scasw), several stack instructions (push, pop, ret), a few
+;;; fundamental arithmetic instructions in both register/register and
+;;; register/immediate form (add, or, adc, and, xor, cmp, mov), and some misc
+;;; instructions (int, stc, inc, dec, the pseudo-instruction db).
 ;;;
 ;;; Errors are not really handled, but the assembler does usually exit cleanly
 ;;; instead of producing garbage.
@@ -115,7 +115,10 @@ int_exit:       equ 0x20
 int_read_file:  equ 0x23
 int_save_file:  equ 0x24
 
-%macro hash_s 1
+; Macro which hashes the given string, and stores the result in the hash_result
+; variable. This MUST be kept in sync with the implementation of the runtime
+; hash function below.
+%macro hash_s 1.nolist
 %assign hash_result 35
 %strlen %%len %1
 %assign %%i 1
@@ -127,7 +130,7 @@ int_save_file:  equ 0x24
 %endrep
 %endmacro
 
-%macro dw_hash 1
+%macro dw_hash 1.nolist
 hash_s %1
 dw hash_result
 %endmacro
@@ -392,9 +395,7 @@ parse_10:
     ; If the lookup above fails, then si points to one after jmp_and_call_table
     ; (i.e., table10), and bp is still correctly saved.
     call lookup
-    jnc .parse_10_end
-    stosb
-    ret
+    jc stosb_ret
 .parse_10_end:
 
 ;; Deals with single-byte single-register instructions, encoded as just the
@@ -408,6 +409,7 @@ done_error_chain_1:
     jnc done_error_chain_0
     pop dx
     add ax,dx
+stosb_ret:
     stosb
     ret
 parse_11_end:
@@ -609,7 +611,8 @@ lookup:
     ret
 
 ;; Compute a hash for table indexing. Stops at the first non-identifier
-;; character after al, consuming all characters and incrementing si.
+;; character after al, consuming all characters and incrementing si. This MUST
+;; be kept in sync with the hash_s macro above.
 ;;
 ;; Inputs:
 ;;   al is the first character in the buffer.
@@ -628,9 +631,8 @@ hash:
     cbw
     ; cx = 31 * cx + (next character)
     sub ax,cx
-    neg ax
     shl cx,0x5
-    sub cx,ax
+    add cx,ax
     lodsb
     ; Stop if we see a non-identifier character.
     cmp al,'@'
@@ -702,6 +704,10 @@ jmp_and_call_table:
 ;; Lookup table for instructions which take up one byte and have no arguments.
 ;; Keys here are the hashes, values are simply the opcode.
 table10:
+    dw_hash 'cbw'
+    dw 0x98
+    dw_hash 'movsw'
+    dw 0xa4
     dw_hash 'stosb'
     dw 0xaa
     dw_hash 'stosw'
@@ -710,10 +716,12 @@ table10:
     dw 0xac
     dw_hash 'lodsw'
     dw 0xad
+    dw_hash 'scasw'
+    dw 0xaf
     dw_hash 'ret'
     dw 0xc3
-    dw_hash 'cbw'
-    dw 0x98
+    dw_hash 'stc'
+    dw 0xf9
     ; NOT FOUND
     dw 0x0
 
@@ -745,6 +753,10 @@ outfile:
 table2x:
     dw_hash 'add'
     dw 0x8000
+    dw_hash 'or'
+    dw 0x8008
+    dw_hash 'adc'
+    dw 0x8010
     dw_hash 'and'
     dw 0x8020
     dw_hash 'xor'

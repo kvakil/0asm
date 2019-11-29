@@ -32,11 +32,11 @@ supports all 16-bit x86 general purpose registers, but does not support
 segment registers.
 
 Many jump instructions are supported (call, jmp, jb, jnb, jz, jnz, jbe,
-jnbe), along with several memory addressing instructions (stosb, stosw,
-lodsb, lodsw, cbw), several stack instructions (push, pop, ret), a
-few fundamental arithmetic instructions in both register/register and
-register/immediate form (add, and, xor, cmp, mov), and some special
-instructions (int, the pseudo-instruction db).
+jnbe), along with several string instructions (stosb, stosw, lodsb, lodsw,
+movsw, cbw, scasw), several stack instructions (push, pop, ret), a few
+fundamental arithmetic instructions in both register/register and
+register/immediate form (add, or, adc, and, xor, cmp, mov), and some misc
+instructions (int, stc, inc, dec, the pseudo-instruction db).
 
 Errors are not really handled, but the assembler does usually exit cleanly
 instead of producing garbage.
