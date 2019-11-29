@@ -219,19 +219,10 @@ done:
     push ax
     ; Get the location to fixup.
     lodsw
-    ; Store the location of the next key in the fixup table.
-    push si
-    ; Get the fixup hint.
     mov di,ax
-    mov si,di
-    lodsw
-    ; Convert to relative address.
-    sub ax,di
-    pop si
-    pop cx
-    add ax,cx
-    ; Store fixed address to output.
-    stosw
+    sub word [di],ax
+    pop ax
+    add word [di],ax
     jmp .fixup_labels_loop
 .fixup_labels_done:
     ; Original start of output buffer.
