@@ -367,7 +367,7 @@ parse_int_end:
 jmp_and_call:
     mov si,jmp_and_call_table
     call lookup
-    jnc .jmp_and_call_end
+    jnc jmp_and_call_end
 .jmp_and_call_match:
     ; Blindly store BOTH bytes into the buffer. (We'll fix this below.)
     stosw
@@ -379,15 +379,18 @@ jmp_and_call:
     dec di
 .jmp_and_call_two_bytes:
     ; Hash the label and add it to the fixup table.
-    call hash_pre
-    mov dh,fixup_table >> 8
-    call add_table
+    call add_fixup
     ; Add a fixup hint of -2. (This effectively creates a relative relocation,
     ; see done.fixup_labels for details.)
     mov ax,0xfffe
     stosw
     ret
-.jmp_and_call_end:
+
+add_fixup:
+    call hash_pre
+    mov dh,fixup_table >> 8
+    jmp add_table
+jmp_and_call_end:
 
 ;; Deals with single-byte no argument instructions, encoded as just the opcode.
 parse_10:
@@ -442,12 +445,11 @@ done_error_chain_3:
     ; but we treat them the same (leading to longer but still valid instruction
     ; encodings).
 
-    ; Move 4th bit into carry flag.
-    shl al,0x5
-    ; Set bx to the carry flag.
-    adc bx,0x0
-    ; Make al the same as before, except without 4th bit set.
-    shr al,0x5
+    ; Sets carry flag if al < 0x8.
+    cmp al,0x8
+    sbb bx,bx
+    inc bx
+    and al,0x7
 
     ; Set LSB of opcode byte correctly.
     add dl,bl
@@ -551,10 +553,7 @@ done_error_chain_3:
 .parse_2x_label:
     ; Backtrack.
     pop si
-    ; Get the hash of this label.
-    call hash_pre
-    mov dh,fixup_table >> 8
-    call add_table
+    call add_fixup
     ; We want to add a value to the relocation such that, when di is added by
     ; the fixup, it will correspond to the absolute address of the loaded
     ; label. This is the start of the output buffer (output_start), minus the
