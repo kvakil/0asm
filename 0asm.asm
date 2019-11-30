@@ -223,7 +223,8 @@ done:
     ; Lookup key in symbol table.
     mov bp,si
     mov si,symbol_table
-    mov cx,ax
+    ; Basically mov cx,ax, but shorter and ax is getting clobbered anyway.
+    xchg ax,cx
     call lookup
     ; Error: could not find a label for this address we need to fix.
     jnc done_error
@@ -307,7 +308,8 @@ add_to_label:
 ;;   di is the value to write.
 ;; Outputs:
 ;;   ax is clobbered to the initial value of di.
-;;   dl is set to zero.
+;;   cx is clobbered.
+;;   di is clobbered.
 add_table:
     ; Save old values.
     push di
@@ -315,6 +317,7 @@ add_table:
     ; Set di equal to the start of the table.
     mov di,dx
     xor ax,ax
+    ; This isn't repnz scasw because we need to preserve cx.
 .keep_scanning:
     scasw
     jnz .keep_scanning
@@ -322,7 +325,8 @@ add_table:
     dec di
     dec di
     ; Store the key-value pair.
-    mov ax,cx
+    ; Basically mov ax,cx, but cx is getting clobbered.
+    xchg ax,cx
     stosw
     ; Pop old di into ax to store correct value.
     pop ax
@@ -331,6 +335,7 @@ add_table:
     ret
 add_to_label_end:
 
+    ; Use ax as the hash value for both of the below.
     ; db
 parse_db:
     hash_s 'db'
@@ -486,10 +491,11 @@ done_error_chain_3:
     ; Get the destination register off the stack.
     pop cx
     or cl,al
-    ; Opcode byte
-    mov al,dl
     ; Mod R/M byte
-    mov ah,cl
+    mov dh,cl
+    ; Opcode byte in dl
+    ; Basically mov ax,dx, but dx doesn't matter.
+    xchg ax,dx
     stosw
     ret
 
@@ -672,7 +678,8 @@ odigit:
     ; Clear the carry flag to show parse was bad.
     clc
 .odigit_good:
-    mov ax,cx
+    ; Basically mov ax,cx, but cx is getting clobbered.
+    xchg ax,cx
     ret
 
 ;; THESE TABLES MUST APPEAR IN THIS ORDER. ;;
