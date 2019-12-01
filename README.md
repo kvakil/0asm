@@ -10,14 +10,14 @@ You can assemble and run 0asm using nasm and QEMU (respectively):
 
     make run
 
-This also copies the input file `test.asm` into the disk under `H`. One
-can then run the assembler in bootOS:
+This also copies the input file `test.asm` into the disk under the filename
+`0`. One can then run the assembler in bootOS:
 
     $0asm
 
-and then run the output program under `P`:
+and then run the output program under `@`:
 
-    $P
+    $@
     Hello, world! $
 
 Further examples are available under the `examples/` directory.

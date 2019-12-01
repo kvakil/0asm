@@ -10,14 +10,14 @@
 ;;;
 ;;;     make run
 ;;;
-;;; This also copies the input file `test.asm` into the disk under `H`. One
-;;; can then run the assembler in bootOS:
+;;; This also copies the input file `test.asm` into the disk under the filename
+;;; `0`. One can then run the assembler in bootOS:
 ;;;
 ;;;     $0asm
 ;;;
-;;; and then run the output program under `P`:
+;;; and then run the output program under `@`:
 ;;;
-;;;     $P
+;;;     $@
 ;;;     Hello, world! $
 ;;;
 ;;; Further examples are available under the `examples/` directory.
@@ -747,6 +747,10 @@ table11:
     dw_hash 'inc'
     db 0x38
     dw_hash 'dec'
+    ; Nasty trick here. We overlap outfile and infile with opcode bytes.
+    ; This makes our input filename "0" and our output filename "@", and
+    ; saves us three bytes.
+outfile:
     db 0x40
     ; NOT FOUND
     dw 0x0
@@ -764,20 +768,15 @@ table2x:
     db 0x10
     dw_hash 'and'
     db 0x20
-    dw_hash 'xor'
-    db 0x30
     dw_hash 'cmp'
     db 0x38
     dw_hash 'mov'
     db 0x88
+    dw_hash 'xor'
+infile:
+    db 0x30
     ; NOT FOUND
     dw 0x0
-
-infile:
-    db 'H',0
-
-outfile:
-    db 'P',0
 
 ;; The "partial" register table contains only keys -- no values. The actual
 ;; register table is initialized using this and initialize_register_table.
