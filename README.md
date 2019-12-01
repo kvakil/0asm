@@ -38,15 +38,16 @@ fundamental arithmetic instructions in both register/register and
 register/immediate form (add, or, adc, and, xor, cmp, mov), and some misc
 instructions (int, stc, inc, dec, the pseudo-instruction db).
 
-Errors are not really handled, but the assembler does usually exit cleanly
+Errors are not always handled, but the assembler does usually exit cleanly
 instead of producing garbage.
 
 ### How does it work?
 
-0asm is a simple 2-pass assembler. The first pass collects labels into a
-"symbol table", and the addresses of instructions which need to be fixed
-into a "fixup table". The first pass also outputs the machine code for
-instructions which do not require any relocation.
+0asm is a simple 2-pass assembler. The first pass outputs the machine
+code for instructions which do not require any relocation; it also collects
+labels into a "symbol table", and the addresses of immediates which need
+to be fixed into a "fixup table". The first pass also outputs the machine
+code for instructions which do not require any relocation.
 
 ### Is it self-hosting?
 
@@ -55,7 +56,7 @@ Unfortunately not yet, for several reasons.
 1. The underlying bootOS only supports 512 byte files.
 2. The instruction encoding produced is not optimal, so it will not fit
 in 512 bytes once assembled.
-3. Shift instructions are not yet supported.
+3. Shift and memory-addressing instructions are not yet supported.
 
 These problems are not insurmountable, although it seems difficult.
 We could easily move the goalpost by typing the entire program using db,

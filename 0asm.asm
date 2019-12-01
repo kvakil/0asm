@@ -38,15 +38,16 @@
 ;;; register/immediate form (add, or, adc, and, xor, cmp, mov), and some misc
 ;;; instructions (int, stc, inc, dec, the pseudo-instruction db).
 ;;;
-;;; Errors are not really handled, but the assembler does usually exit cleanly
+;;; Errors are not always handled, but the assembler does usually exit cleanly
 ;;; instead of producing garbage.
 ;;;
 ;;; ### How does it work?
 ;;;
-;;; 0asm is a simple 2-pass assembler. The first pass collects labels into a
-;;; "symbol table", and the addresses of instructions which need to be fixed
-;;; into a "fixup table". The first pass also outputs the machine code for
-;;; instructions which do not require any relocation.
+;;; 0asm is a simple 2-pass assembler. The first pass outputs the machine
+;;; code for instructions which do not require any relocation; it also collects
+;;; labels into a "symbol table", and the addresses of immediates which need
+;;; to be fixed into a "fixup table". The first pass also outputs the machine
+;;; code for instructions which do not require any relocation.
 ;;;
 ;;; ### Is it self-hosting?
 ;;;
@@ -55,7 +56,7 @@
 ;;; 1. The underlying bootOS only supports 512 byte files.
 ;;; 2. The instruction encoding produced is not optimal, so it will not fit
 ;;; in 512 bytes once assembled.
-;;; 3. Shift instructions are not yet supported.
+;;; 3. Shift and memory-addressing instructions are not yet supported.
 ;;;
 ;;; These problems are not insurmountable, although it seems difficult.
 ;;; We could easily move the goalpost by typing the entire program using db,
@@ -90,11 +91,15 @@
 ;; hash: a formula which maps identifiers to a 16-bit value (for shorter, but
 ;; lossy, string comparisons). See the hash procedure for its computation.
 
-;; table: an associative array of (key, value) pairs. Keys are typically
+;; short table: an associative array of (key, value) pairs. Keys are typically
 ;; outputs of the hash function, while values are any 16-bit values.
 
+;; long table: a short table with 16-bit values. Long tables are ONLY used for
+;; the label fixup, otherwise we use short tables because they are more size
+;; efficient.
+
 ;; clobbered: indicates that a register is changed by a procedure in some
-;; unspecified fashion.
+;; (typically unspecified) fashion.
 
 ;; consumed: as we read characters from our input buffer, we "consume"
 ;; them. We generally keep the invariant that al is the next character in
@@ -104,6 +109,7 @@
 
 ;; ";!": this comment symbol indicates that some code or functionality is
 ;; easily added, but was removed so that the program fits in 512 bytes.
+;; As more features are implemented, these comments are removed.
 
 cpu 186
 bits 16
@@ -120,7 +126,7 @@ int_save_file:  equ 0x24
 ; variable. This MUST be kept in sync with the implementation of the runtime
 ; hash function below.
 %macro hash_s 1.nolist
-%assign hash_result 35
+%assign hash_result 0x23
 %strlen %%len %1
 %assign %%i 1
 %rep %%len
@@ -188,7 +194,7 @@ init:
     ; buffer will start at 0x6d00.
     mov sp,input_start
     mov di,sp
-    ; Read in the file "H".
+    ; Read in the file.
     mov bx,infile
     int int_read_file
     jc done_error
@@ -197,10 +203,11 @@ init:
     ; Give space for 0x200 output bytes, until 0x6f00.
     mov di,output_start
 
-;; Keep reading instructions. This lets us use "ret" when we successfully
-;; parse an instruction, which ends up saving many bytes over
-;; "jmp read_instruction", because we need to jump back so often.
+;; Keep reading instructions.
 read_instruction_loop:
+    ; This lets us use "ret" when we successfully parse an instruction, which
+    ; ends up saving many bytes over "jmp read_instruction", because we need
+    ; to jump back so often.
     call read_instruction
     jmp read_instruction_loop
 
@@ -213,10 +220,10 @@ done:
     ; The input file is NUL terminated. If this is not a NUL, then we need to
     ; keep parsing the file.
     and al,al
-    jne done_end
+    jnz done_end
 .fixup_labels:
     ; Set lookup to "long mode" by modifying lodsb -> lodsw.
-    ; This makes the values two bytes each, which matches add_table.
+    ; This allows us to lookup into long tables like the symbol table.
     inc byte [lookup_lodsb]
     mov si,fixup_table
 .fixup_labels_loop:
@@ -233,9 +240,9 @@ done:
     ; Error: could not find a label for this address we need to fix.
     jnc done_error
 
-    ; Currently there is a "fixup hint" (f) stored at the address of the
+    ; Currently there is a "fixup hint" (*i) stored at the address of the
     ; immediate we are fixing (i), and the label address is d. This code sets
-    ; *i = f + d - i. This allows us to support both relative and absolute
+    ; *i = *i + d - i. This allows us to support both relative and absolute
     ; relocations, by choosing the fixup hint appropriately. (See jmp_and_call
     ; as well as parse_2x.parse_2x_label for relative and absolute relocations
     ; respectively.)
@@ -245,14 +252,16 @@ done:
     ; Get the location to fixup.
     lodsw
     mov di,ax
+    ; *i -= i
     sub [di],ax
     pop ax
+    ; *i += d
     add [di],ax
     jmp .fixup_labels_loop
 .fixup_labels_done:
     ; Original start of output buffer.
     mov di,output_start
-    ; Output to the file "P".
+    ; Output to file.
     mov bx,outfile
     int int_save_file
 done_error:
@@ -263,7 +272,7 @@ done_end:
     cmp al,' '
     jbe read_instruction
 
-;; If we see a comment, read until a newline.
+;; Parse comment by consuming until we see a newline.
 read_comment:
     cmp al,';'
     jnz .read_comment_end
@@ -291,10 +300,6 @@ read_comment:
     ;      ret$
     ;         as
 
-    ; Hashes are critical for the memory efficiency of 0asm. The computed hash
-    ; is used as an index in an associative array. The code in hash.c is
-    ; helpful for computing the hash of many instructions at once.
-
 ;; If the next character in the buffer is a colon, this adds the label to our
 ;; symbol table.
 add_to_label:
@@ -304,6 +309,7 @@ add_to_label:
     ; SELF-MODIFYING.
 symbol_table_addr:
     mov ax,symbol_table
+    ; Load address of the immediate in the above instruction
     mov bx,symbol_table_addr+1
 
     ; Inlining the tail call to add_table here saves us a two bytes of a jmp.
@@ -311,13 +317,15 @@ symbol_table_addr:
 ;; Store (cx, di) at ax, and increment bx to point to the new end.
 ;; Inputs:
 ;;   ax is the address of the end of the table.
-;;   bx is the address of ax.
+;;   bx is the address of the immediate in the instruction that loaded ax.
+;;      (Note: this code is self-modifying.)
 ;;   cx is the key to write.
 ;;   di is the value to write.
 ;; Outputs:
 ;;   ax is clobbered to the initial value of di.
 ;;   *bx is incremented by 4 to point to the new end.
 ;;   cx is clobbered.
+;;   bx, di are preserved.
 add_table:
     ; Set ax = old cx, di = old ax, cx = old di.
     xchg ax,di
@@ -377,6 +385,7 @@ jmp_and_call:
     ; If this is greater than 0x90, it's an extended instruction.
     ; The first byte should be 0xf, and the next byte is obtained from
     ; the table.
+    ; TODO: can we do better with stosb?
     mov byte [di],0xf
     inc di
 .single_byte:
@@ -394,6 +403,7 @@ add_fixup:
     ; SELF-MODIFYING.
 fixup_table_addr:
     mov ax,fixup_table
+    ; Load address of the immediate in the above instruction
     mov bx,fixup_table_addr+1
     jmp add_table
 jmp_and_call_end:
@@ -504,13 +514,6 @@ done_error_chain_3:
     ; Backtrack to point to the immediate / label.
     pop si
 
-    ; In the immediate case, the opcode byte is USUALLY reusable as the Mod R/M
-    ; byte. (The exception is the case when we have a MOV instruction.) First,
-    ; we can remove the LSB for the opcode byte (which indicates if the
-    ; instruction operates on 8-bit or 16-bit registers). The middle three
-    ; bits of this opcode byte select the correct operation for all Group 1
-    ; instructions.
-
     ; Check if this is a MOV instruction.
     cmp dl,0x88
     ; Opcode byte for all group 1 immediate instructions
@@ -523,11 +526,18 @@ done_error_chain_3:
     ; opcode. This effectively allows us to reuse the opcode byte for Group 1
     ; instructions, and makes the MOV instruction a "raw" encoding which uses
     ; an opcode byte of 0. It also maintains whether this instruction is
-    ; supposed to operate on 8-bit or 16-bit registers, which is useful for bl
-    ; below.
+    ; supposed to operate on 8-bit or 16-bit registers.
     mov dl,bl
 
 .parse_group1_immediate:
+
+    ; In the immediate case, the opcode byte of the register-register
+    ; instruction is USUALLY reusable as the Mod R/M byte. (The exception
+    ; is the case when we have a MOV instruction.) First, we can remove the
+    ; LSB for the opcode byte (which indicates if the instruction operates
+    ; on 8-bit or 16-bit registers). The middle three bits of this opcode
+    ; byte select the correct operation for all Group 1 instructions.
+
     add al,bl
     stosb
     ; Construct the Mod R/M byte using the old register.
@@ -588,10 +598,7 @@ accept_register:
     mov si,register_table
     ; FALLTHROUGH to lookup (saves us two bytes)
 
-;; Lookup in the given table. A table is an array of key-value pairs, where
-;; each key occupies a single word and each value occupies a single byte. The
-;; keys must be non-zero, because a zero key is reserved to indicate the end.
-;; The table must be terminated by a zero key.
+;; Lookup the key in the given SHORT table, returning the value.
 ;;
 ;; Inputs:
 ;;   cx is the key to lookup.
@@ -609,8 +616,9 @@ lookup:
     jz lookup_not_found
 lookup_keep_going:
     cmp ax,cx
-    ; SELF-MODIFYING.
 lookup_lodsb:
+    ; SELF-MODIFYING.
+    ; This can be changed to a lodsw to make lookup use long tables.
     lodsb
     jne lookup
 lookup_done:
@@ -690,7 +698,7 @@ odigit:
 
 ;; Lookup table for jump and call instructions (anything requiring relative
 ;; relocation with 16-bit addresses). Keys are the hashes, and values are the
-;; opcode, which may be multiple bytes long.
+;; opcode.
 jmp_and_call_table:
     dw_hash 'call'
     db 0xe8
@@ -756,9 +764,8 @@ outfile:
     dw 0x0
 
 ;; Lookup table for instructions which take two arguments. Keys here are the
-;; hashes. Values have two parts: the low-byte is the opcode byte for
-;; non-immediate (register/register) forms, while the the high-byte is the
-;; opcode for the immediate (register/immediate) form.
+;; hashes. Values are the opcode byte for non-immediate (register/register)
+;; forms.
 table2x:
     dw_hash 'add'
     db 0x00
