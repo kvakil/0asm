@@ -510,9 +510,9 @@ done_error_chain_3:
     ; instruction operates on 8-bit or 16-bit registers). The middle three
     ; bits of this opcode byte select the correct operation for all Group 1
     ; instructions.
-    mov ax,dx
+
     ; Check if this is a MOV instruction.
-    cmp al,0x88
+    cmp dl,0x88
     ; Opcode byte for all group 1 immediate instructions
     mov al,0x80
     je .parse_group1_immediate
