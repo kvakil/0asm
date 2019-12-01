@@ -306,12 +306,13 @@ symbol_table_addr:
 
 ;; Store (cx, di) at ax, and increment bx to point to the new end.
 ;; Inputs:
-;;   bx is the address of the table.
+;;   ax is the address of the end of the table.
+;;   bx is the address of ax.
 ;;   cx is the key to write.
 ;;   di is the value to write.
 ;; Outputs:
 ;;   ax is clobbered to the initial value of di.
-;;   *bx is incremented by 4.
+;;   *bx is incremented by 4 to point to the new end.
 ;;   cx is clobbered.
 add_table:
     ; Set ax = old cx, di = old ax, cx = old di.
@@ -329,7 +330,6 @@ add_table:
     ret
 add_to_label_end:
 
-    ; Use ax as the hash value for both of the below.
     ; db
 parse_db:
     hash_s 'db'
