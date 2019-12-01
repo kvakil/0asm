@@ -105,6 +105,7 @@
 ;; ";!": this comment symbol indicates that some code or functionality is
 ;; easily added, but was removed so that the program fits in 512 bytes.
 
+cpu 186
 bits 16
 fixup_table:    equ 0x4000
 symbol_table:   equ 0x5000
@@ -169,7 +170,7 @@ initialize_register_table:
     ; Copy over partial register table key.
     movsw
     ; Store the index of this register.
-    stosw
+    stosb
     inc ax
     ; If al == 16, then we've finished copying partial_register_table.
     ; From initialize_tables above, we know that this table was zero.
@@ -214,6 +215,9 @@ done:
     and al,al
     jne done_end
 .fixup_labels:
+    ; Set lookup to "long mode" by modifying lodsb -> lodsw.
+    ; This makes the values two bytes each, which matches add_table.
+    inc byte [lookup_lodsb]
     mov si,fixup_table
 .fixup_labels_loop:
     ; Load key from fixup table.
@@ -241,9 +245,9 @@ done:
     ; Get the location to fixup.
     lodsw
     mov di,ax
-    sub word [di],ax
+    sub [di],ax
     pop ax
-    add word [di],ax
+    add [di],ax
     jmp .fixup_labels_loop
 .fixup_labels_done:
     ; Original start of output buffer.
@@ -368,15 +372,15 @@ jmp_and_call:
     call lookup
     jnc jmp_and_call_end
 .jmp_and_call_match:
-    ; Blindly store BOTH bytes into the buffer. (We'll fix this below.)
-    stosw
-    ; If this is a one byte opcode, then decrement di. This effectively makes
-    ; the stosw above act as a stosb, since the high 0 byte will be overwritten
-    ; by the immediate below.
-    and ah,ah
-    jnz .jmp_and_call_two_bytes
-    dec di
-.jmp_and_call_two_bytes:
+    cmp al,0x90
+    jnb .single_byte
+    ; If this is greater than 0x90, it's an extended instruction.
+    ; The first byte should be 0xf, and the next byte is obtained from
+    ; the table.
+    mov byte [di],0xf
+    inc di
+.single_byte:
+    stosb
     ; Hash the label and add it to the fixup table.
     call add_fixup
     ; Add a fixup hint of -2. (This effectively creates a relative relocation,
@@ -506,13 +510,15 @@ done_error_chain_3:
     ; instruction operates on 8-bit or 16-bit registers). The middle three
     ; bits of this opcode byte select the correct operation for all Group 1
     ; instructions.
-
-    ; The top of our lookup table stores the corresponding opcode for immediate
-    ; version of the instruction.
-    mov al,dh
-    cmp al,0x80
+    mov ax,dx
+    ; Check if this is a MOV instruction.
+    cmp al,0x88
+    ; Opcode byte for all group 1 immediate instructions
+    mov al,0x80
     je .parse_group1_immediate
 
+    ; Opcode byte for MOV with immediate
+    mov al,0xc6
     ; In this case it's a MOV instruction, we kill the old top bits of the
     ; opcode. This effectively allows us to reuse the opcode byte for Group 1
     ; instructions, and makes the MOV instruction a "raw" encoding which uses
@@ -583,33 +589,34 @@ accept_register:
     ; FALLTHROUGH to lookup (saves us two bytes)
 
 ;; Lookup in the given table. A table is an array of key-value pairs, where
-;; each key and value occupies a single word. The keys must be non-zero,
-;; because a zero key is reserved to indicate the end. The table must be
-;; terminated by a zero key.
+;; each key occupies a single word and each value occupies a single byte. The
+;; keys must be non-zero, because a zero key is reserved to indicate the end.
+;; The table must be terminated by a zero key.
 ;;
 ;; Inputs:
 ;;   cx is the key to lookup.
 ;;   si points to the first key of the table.
 ;;   bp is the old value of si.
 ;; Outputs:
-;;   ax is the returned value, or 0 on failure.
+;;   al is the returned value, or 0 on failure.
 ;;   si is modified.
 ;;      if the lookup is successful, it is set to bp.
 ;;      if the lookup fails, it points one word after the end of the table.
 ;;   carry flag is set iff the lookup was successful.
-;;   
 lookup:
     lodsw
     and ax,ax
-    jz .lookup_not_found
-.lookup_keep_going:
+    jz lookup_not_found
+lookup_keep_going:
     cmp ax,cx
-    lodsw
+    ; SELF-MODIFYING.
+lookup_lodsb:
+    lodsb
     jne lookup
-.lookup_done:
+lookup_done:
     stc
     mov si,bp
-.lookup_not_found:
+lookup_not_found:
     ret
 
 ;; Compute a hash for table indexing. Stops at the first non-identifier
@@ -686,21 +693,21 @@ odigit:
 ;; opcode, which may be multiple bytes long.
 jmp_and_call_table:
     dw_hash 'call'
-    dw 0xe8
+    db 0xe8
     dw_hash 'jmp'
-    dw 0xe9
+    db 0xe9
     dw_hash 'jb'
-    dw 0x820f
+    db 0x82
     dw_hash 'jnb'
-    dw 0x830f
+    db 0x83
     dw_hash 'jz'
-    dw 0x840f
+    db 0x84
     dw_hash 'jnz'
-    dw 0x850f
+    db 0x85
     dw_hash 'jbe'
-    dw 0x860f
+    db 0x86
     dw_hash 'jnbe'
-    dw 0x870f
+    db 0x87
     ; NOT FOUND
     dw 0x0
 
@@ -708,23 +715,23 @@ jmp_and_call_table:
 ;; Keys here are the hashes, values are simply the opcode.
 table10:
     dw_hash 'cbw'
-    dw 0x98
+    db 0x98
     dw_hash 'movsw'
-    dw 0xa4
+    db 0xa4
     dw_hash 'stosb'
-    dw 0xaa
+    db 0xaa
     dw_hash 'stosw'
-    dw 0xab
+    db 0xab
     dw_hash 'lodsb'
-    dw 0xac
+    db 0xac
     dw_hash 'lodsw'
-    dw 0xad
+    db 0xad
     dw_hash 'scasw'
-    dw 0xaf
+    db 0xaf
     dw_hash 'ret'
-    dw 0xc3
+    db 0xc3
     dw_hash 'stc'
-    dw 0xf9
+    db 0xf9
     ; NOT FOUND
     dw 0x0
 
@@ -734,18 +741,13 @@ table10:
 ;; the values here are shifted down by 0x8).
 table11:
     dw_hash 'push'
-    ; Nasty trick here. We overlap infile and outfile with the push and pop
-    ; opcodes respectively. This makes our input filename "H" and our output
-    ; filename "P", and saves us three bytes.
-infile:
-    dw 0x48
+    db 0x48
     dw_hash 'pop'
-outfile:
-    dw 0x50
+    db 0x50
     dw_hash 'inc'
-    dw 0x38
+    db 0x38
     dw_hash 'dec'
-    dw 0x40
+    db 0x40
     ; NOT FOUND
     dw 0x0
 
@@ -755,21 +757,27 @@ outfile:
 ;; opcode for the immediate (register/immediate) form.
 table2x:
     dw_hash 'add'
-    dw 0x8000
+    db 0x00
     dw_hash 'or'
-    dw 0x8008
+    db 0x08
     dw_hash 'adc'
-    dw 0x8010
+    db 0x10
     dw_hash 'and'
-    dw 0x8020
+    db 0x20
     dw_hash 'xor'
-    dw 0x8030
+    db 0x30
     dw_hash 'cmp'
-    dw 0x8038
+    db 0x38
     dw_hash 'mov'
-    dw 0xc688
+    db 0x88
     ; NOT FOUND
     dw 0x0
+
+infile:
+    db 'H',0
+
+outfile:
+    db 'P',0
 
 ;; The "partial" register table contains only keys -- no values. The actual
 ;; register table is initialized using this and initialize_register_table.
