@@ -385,7 +385,6 @@ jmp_and_call:
     ; If this is greater than 0x90, it's an extended instruction.
     ; The first byte should be 0xf, and the next byte is obtained from
     ; the table.
-    ; TODO: can we do better with stosb?
     mov byte [di],0xf
     inc di
 .single_byte:
