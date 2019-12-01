@@ -297,40 +297,34 @@ add_to_label:
     cmp al,':'
     jne add_to_label_end
 
-    mov dh,symbol_table >> 8
+    ; SELF-MODIFYING.
+symbol_table_addr:
+    mov ax,symbol_table
+    mov bx,symbol_table_addr+1
+
     ; Inlining the tail call to add_table here saves us a two bytes of a jmp.
 
-;; Add (cx, di) to the table at cx.
+;; Store (cx, di) at ax, and increment bx to point to the new end.
 ;; Inputs:
+;;   bx is the address of the table.
 ;;   cx is the key to write.
-;;   dh is the (high part) of the address of the table to write to.
-;;      the low part will be ignored and zero'd out.
 ;;   di is the value to write.
 ;; Outputs:
 ;;   ax is clobbered to the initial value of di.
+;;   *bx is incremented by 4.
 ;;   cx is clobbered.
-;;   di is clobbered.
 add_table:
-    ; Save old values.
-    push di
-    xor dl,dl
-    ; Set di equal to the start of the table.
-    mov di,dx
-    xor ax,ax
-    ; This isn't repnz scasw because we need to preserve cx.
-.keep_scanning:
-    scasw
-    jnz .keep_scanning
-    ; Decrementing twice is shorter than subtracting 2.
-    dec di
-    dec di
-    ; Store the key-value pair.
-    ; Basically mov ax,cx, but cx is getting clobbered.
+    ; Set ax = old cx, di = old ax, cx = old di.
+    xchg ax,di
+    xchg ax,cx
+    ; Store old di at old ax.
+    stosw
+    ; Store old cx at old ax+2.
+    ; This xchg could be mov ax,cx, but it's shorter this way.
     xchg ax,cx
     stosw
-    ; Pop old di into ax to store correct value.
-    pop ax
-    stosw
+    ; Update the end of the table.
+    mov [bx],di
     mov di,ax
     ret
 add_to_label_end:
@@ -393,7 +387,10 @@ jmp_and_call:
 
 add_fixup:
     call hash_pre
-    mov dh,fixup_table >> 8
+    ; SELF-MODIFYING.
+fixup_table_addr:
+    mov ax,fixup_table
+    mov bx,fixup_table_addr+1
     jmp add_table
 jmp_and_call_end:
 
